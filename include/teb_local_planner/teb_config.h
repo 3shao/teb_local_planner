@@ -98,6 +98,7 @@ public:
     double wheelbase; //!< The distance between the drive shaft and steering axle (only required for a carlike robot with 'cmd_angle_instead_rotvel' enabled); The value might be negative for back-wheeled robots!
     bool cmd_angle_instead_rotvel; //!< Substitute the rotational velocity in the commanded velocity message by the corresponding steering angle (check 'axles_distance')
     bool is_footprint_dynamic; //<! If true, updated the footprint before checking trajectory feasibility
+    double decel_width;
   } robot; //!< Robot related parameters
   
   //! Goal tolerance related parameters
@@ -200,6 +201,13 @@ public:
     double oscillation_filter_duration; //!< Filter length/duration [sec] for the detection of oscillations
   } recovery; //!< Parameters related to recovery and backup strategies
 
+  struct Rotation{
+      double accel;
+      double decel;
+      double max_turn_speed;
+      double min_turn_speed;
+  }rotation;
+
   
   /**
   * @brief Construct the TebConfig using default values.
@@ -250,6 +258,7 @@ public:
     robot.wheelbase = 1.0;
     robot.cmd_angle_instead_rotvel = false;
     robot.is_footprint_dynamic = false;
+    robot.decel_width = 0.5;
     
     // GoalTolerance
     
@@ -335,6 +344,11 @@ public:
     recovery.oscillation_omega_eps = 0.1;
     recovery.oscillation_recovery_min_duration = 10;
     recovery.oscillation_filter_duration = 10;
+
+    rotation.min_turn_speed = 0.15;
+    rotation.max_turn_speed = 1.5;
+    rotation.decel = 2.0;
+    rotation.accel  = 1.5;
 
 
   }

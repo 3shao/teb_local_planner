@@ -77,6 +77,7 @@ void TebConfig::loadRosParamFromNodeHandle(const ros::NodeHandle& nh)
   nh.param("wheelbase", robot.wheelbase, robot.wheelbase);
   nh.param("cmd_angle_instead_rotvel", robot.cmd_angle_instead_rotvel, robot.cmd_angle_instead_rotvel);
   nh.param("is_footprint_dynamic", robot.is_footprint_dynamic, robot.is_footprint_dynamic);
+  nh.param("decel_width", robot.decel_width, robot.decel_width);
   
   // GoalTolerance
   nh.param("xy_goal_tolerance", goal_tolerance.xy_goal_tolerance, goal_tolerance.xy_goal_tolerance);
@@ -154,6 +155,15 @@ void TebConfig::loadRosParamFromNodeHandle(const ros::NodeHandle& nh)
   nh.param("oscillation_recovery_min_duration", recovery.oscillation_recovery_min_duration, recovery.oscillation_recovery_min_duration);
   nh.param("oscillation_filter_duration", recovery.oscillation_filter_duration, recovery.oscillation_filter_duration);
 
+
+  //Rotation
+  nh.param("min_turn_speed", rotation.min_turn_speed, rotation.min_turn_speed);
+  nh.param("max_turn_speed", rotation.max_turn_speed, rotation.max_turn_speed);
+  nh.param("accel", rotation.accel, rotation.accel);
+  nh.param("decel", rotation.decel, rotation.decel);
+
+
+
   checkParameters();
   checkDeprecated(nh);
 }
@@ -187,6 +197,7 @@ void TebConfig::reconfigure(TebLocalPlannerReconfigureConfig& cfg)
   robot.min_turning_radius = cfg.min_turning_radius;
   robot.wheelbase = cfg.wheelbase;
   robot.cmd_angle_instead_rotvel = cfg.cmd_angle_instead_rotvel;
+  robot.decel_width = cfg.decel_width;
   
   // GoalTolerance
   goal_tolerance.xy_goal_tolerance = cfg.xy_goal_tolerance;
@@ -253,6 +264,12 @@ void TebConfig::reconfigure(TebLocalPlannerReconfigureConfig& cfg)
   
   recovery.shrink_horizon_backup = cfg.shrink_horizon_backup;
   recovery.oscillation_recovery = cfg.oscillation_recovery;
+
+  //Rotation
+  rotation.min_turn_speed = cfg.min_turn_speed;
+  rotation.max_turn_speed = cfg.max_turn_speed;
+  rotation.accel          = cfg.accel;
+  rotation.decel          = cfg.decel;
   
   checkParameters();
 }

@@ -76,6 +76,8 @@ TebLocalPlannerROS::~TebLocalPlannerROS()
 void TebLocalPlannerROS::reconfigureCB(TebLocalPlannerReconfigureConfig& config, uint32_t level)
 {
   cfg_.reconfigure(config);
+  old_max_vel_x = cfg_.robot.max_vel_x;    
+
 }
 
 void TebLocalPlannerROS::initialize(std::string name, tf::TransformListener* tf, costmap_2d::Costmap2DROS* costmap_ros)
@@ -87,7 +89,8 @@ void TebLocalPlannerROS::initialize(std::string name, tf::TransformListener* tf,
     ros::NodeHandle nh("~/" + name);
 	        
     // get parameters of TebConfig via the nodehandle and override the default config
-    cfg_.loadRosParamFromNodeHandle(nh);       
+    cfg_.loadRosParamFromNodeHandle(nh);    
+    old_max_vel_x = cfg_.robot.max_vel_x;       
     
     // reserve some memory for obstacles
     obstacles_.reserve(500);
@@ -177,6 +180,11 @@ void TebLocalPlannerROS::initialize(std::string name, tf::TransformListener* tf,
     // set initialized flag
     initialized_ = true;
 
+    currentWheelTurnSet = 0;
+    rotate_to_global_plan_ = true;
+    dt = 0.1;
+    time_last_rotation_ = ros::Time::now();
+
     ROS_DEBUG("teb_local_planner plugin initialized.");
   }
   else
@@ -207,6 +215,44 @@ bool TebLocalPlannerROS::setPlan(const std::vector<geometry_msgs::PoseStamped>& 
   goal_reached_ = false;
   
   return true;
+}
+
+bool TebLocalPlannerROS::rotateToOrientation(double angle, geometry_msgs::Twist& cmd_vel, double accuracy) {
+    bool ret = true;
+    float OmgSet = 0.0f;
+    if (fabs(angle)> 2*accuracy) {
+        if ((((float)(currentWheelTurnSet*currentWheelTurnSet))/((float)(2*cfg_.rotation.decel)))>=(fabs(angle)-0.3f)) {
+            currentWheelTurnSet -= ((float)(cfg_.rotation.decel)*dt);
+            if(currentWheelTurnSet<cfg_.rotation.min_turn_speed)currentWheelTurnSet=cfg_.rotation.min_turn_speed;
+        } else if ((((float)(currentWheelTurnSet*currentWheelTurnSet))/((float)(2*cfg_.rotation.decel)))>=(fabs(angle)-0.2f)) {
+             currentWheelTurnSet -= ((float)(2*cfg_.rotation.decel)*dt);
+            if(currentWheelTurnSet<cfg_.rotation.min_turn_speed)currentWheelTurnSet=cfg_.rotation.min_turn_speed;
+        } else {
+            if (currentWheelTurnSet< (cfg_.rotation.max_turn_speed)) {
+                currentWheelTurnSet += (cfg_.rotation.accel)*dt;
+            } else {
+                currentWheelTurnSet = (cfg_.rotation.max_turn_speed);
+            }
+        }
+        OmgSet = currentWheelTurnSet;
+        if( angle < 0)
+          OmgSet *= -1;
+
+
+    } else {
+        if (fabs(angle)>accuracy) {
+          OmgSet =cfg_.rotation.min_turn_speed;
+          if( angle < 0)
+                OmgSet *= -1;
+        } else {
+            currentWheelTurnSet = 0;
+            OmgSet = 0.0f;
+            ret = false;
+        }
+    }
+    cmd_vel.linear.x = 0;
+    cmd_vel.angular.z = OmgSet;
+    return ret;
 }
 
 
@@ -260,12 +306,15 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
   global_goal.setData( tf_plan_to_global * global_goal );
   double dx = global_goal.getOrigin().getX() - robot_pose_.x();
   double dy = global_goal.getOrigin().getY() - robot_pose_.y();
+  double goal_distance = fabs(std::sqrt(dx*dx+dy*dy));
   double delta_orient = g2o::normalize_theta( tf::getYaw(global_goal.getRotation()) - robot_pose_.theta() );
-  if(fabs(std::sqrt(dx*dx+dy*dy)) < cfg_.goal_tolerance.xy_goal_tolerance
+  if(goal_distance < cfg_.goal_tolerance.xy_goal_tolerance
     && fabs(delta_orient) < cfg_.goal_tolerance.yaw_goal_tolerance
     && (!cfg_.goal_tolerance.complete_global_plan || via_points_.size() == 0))
   {
     goal_reached_ = true;
+    rotate_to_global_plan_ = true;
+    currentWheelTurnSet = 0;
     return true;
   }
   
@@ -297,6 +346,25 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
     robot_goal_.theta() = tf::getYaw(goal_point.getRotation());
   }
 
+
+  double goal_angle = atan2(goal_point.getOrigin().getY() - robot_pose.getOrigin().getY(), goal_point.getOrigin().getX() - robot_pose.getOrigin().getX());
+  double delta_rotate_orient = g2o::normalize_theta( goal_angle - robot_pose_.theta());
+  if( rotate_to_global_plan_) {
+      ros::Time t = ros::Time::now();
+      if(  (t - time_last_rotation_).toSec() > 0.5){
+        dt = 0.1;
+      }else {
+        dt = (t - time_last_rotation_).toSec();
+      }
+      time_last_rotation_ = t;
+      rotate_to_global_plan_ = rotateToOrientation(delta_rotate_orient, cmd_vel, 0.1);
+      last_cmd_ = cmd_vel;
+      planner_->visualize();
+      visualization_->publishViaPoints(via_points_);
+      visualization_->publishGlobalPlan(global_plan_);
+      return true;
+  }
+
   // overwrite/update start of the transformed plan with the actual robot position (allows using the plan as initial trajectory)
   if (transformed_plan.size()==1) // plan only contains the goal
   {
@@ -319,6 +387,16 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
     
   // Do not allow config changes during the following optimization step
   boost::mutex::scoped_lock cfg_lock(cfg_.configMutex());
+
+  if( goal_distance < cfg_.trajectory.max_global_plan_lookahead_dist/2.0) {
+      double last_max_vel = 2* old_max_vel_x* goal_distance/cfg_.trajectory.max_global_plan_lookahead_dist;
+      if ( last_max_vel < cfg_.robot.max_vel_x )
+        cfg_.robot.max_vel_x = last_max_vel;
+
+      if( cfg_.robot.max_vel_x < 0.15 ){
+          cfg_.robot.max_vel_x = 0.15;
+      }
+  }
     
   // Now perform the actual planning
 //   bool success = planner_->plan(robot_pose_, robot_goal_, robot_vel_, cfg_.goal_tolerance.free_goal_vel); // straight line init
@@ -412,6 +490,8 @@ bool TebLocalPlannerROS::isGoalReached()
   if (goal_reached_)
   {
     ROS_INFO("GOAL Reached!");
+    rotate_to_global_plan_ = true;
+    currentWheelTurnSet = 0;
     planner_->clearPlanner();
     return true;
   }
@@ -426,6 +506,11 @@ void TebLocalPlannerROS::updateObstacleContainerWithCostmap()
   if (cfg_.obstacles.include_costmap_obstacles)
   {
     Eigen::Vector2d robot_orient = robot_pose_.orientationUnitVec();
+    boost::mutex::scoped_lock cfg_lock(cfg_.configMutex());
+    if( fabs(cfg_.robot.max_vel_x - old_max_vel_x) > 0.005){
+        cfg_.robot.max_vel_x = old_max_vel_x;
+    }
+
     
     for (unsigned int i=0; i<costmap_->getSizeInCellsX()-1; ++i)
     {
@@ -438,6 +523,25 @@ void TebLocalPlannerROS::updateObstacleContainerWithCostmap()
             
           // check if obstacle is interesting (e.g. not far behind the robot)
           Eigen::Vector2d obs_dir = obs-robot_pose_.position();
+
+          if( obs_dir.dot(robot_orient) > 0 && fabs(obs_dir.coeff(1)) < cfg_.robot.decel_width ) {
+              if(obs_dir.norm() < cfg_.obstacles.costmap_obstacles_behind_robot_dist/2.0){
+                  if( cfg_.robot.max_vel_x > old_max_vel_x*0.3)
+                    cfg_.robot.max_vel_x = old_max_vel_x*0.3;
+              } else if (obs_dir.norm() < cfg_.obstacles.costmap_obstacles_behind_robot_dist) {
+                  if( cfg_.robot.max_vel_x > old_max_vel_x*0.5)
+                    cfg_.robot.max_vel_x = old_max_vel_x*0.5;
+              } else if (obs_dir.norm() < cfg_.obstacles.costmap_obstacles_behind_robot_dist*2) {
+                  if( cfg_.robot.max_vel_x > old_max_vel_x*0.75)
+                    cfg_.robot.max_vel_x = old_max_vel_x*0.75;
+              } else if (obs_dir.norm() < cfg_.obstacles.costmap_obstacles_behind_robot_dist*3) {
+                  if( cfg_.robot.max_vel_x > old_max_vel_x*0.85)
+                    cfg_.robot.max_vel_x = old_max_vel_x*0.85;
+              }
+          }
+
+
+
           if ( obs_dir.dot(robot_orient) < 0 && obs_dir.norm() > cfg_.obstacles.costmap_obstacles_behind_robot_dist  )
             continue;
             

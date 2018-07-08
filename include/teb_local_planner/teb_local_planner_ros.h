@@ -239,6 +239,16 @@ protected:
     */
   void customViaPointsCB(const nav_msgs::Path::ConstPtr& via_points_msg);
 
+
+   /**
+   * @brief rotateToOrientation
+   * @param angle
+   * @param cmd_vel
+   * @param accuracy
+   * @return
+   */
+  bool rotateToOrientation(double angle, geometry_msgs::Twist& cmd_vel, double accuracy);
+
    /**
     * @brief Prune global plan such that already passed poses are cut off
     * 
@@ -400,6 +410,12 @@ private:
     
   // flags
   bool initialized_; //!< Keeps track about the correct initialization of this class
+
+  bool rotate_to_global_plan_;
+  float currentWheelTurnSet;
+  double old_max_vel_x;
+  double dt;
+  ros::Time time_last_rotation_; //!< Store at which time stamp the last oscillation was detected
 
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
