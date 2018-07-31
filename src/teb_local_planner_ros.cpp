@@ -317,6 +317,11 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
     currentWheelTurnSet = 0;
     return true;
   }
+
+  if(goal_distance < cfg_.goal_tolerance.xy_goal_tolerance&&fabs(last_cmd_.linear.x)< 0.1) {
+      rotateToOrientation(delta_orient, cmd_vel, cfg_.goal_tolerance.yaw_goal_tolerance);
+      return true;
+  }
   
   
   // check if we should enter any backup mode and apply settings
@@ -334,7 +339,9 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
   tf::Stamped<tf::Pose> goal_point;
   tf::poseStampedMsgToTF(transformed_plan.back(), goal_point);
   robot_goal_.x() = goal_point.getOrigin().getX();
-  robot_goal_.y() = goal_point.getOrigin().getY();      
+  robot_goal_.y() = goal_point.getOrigin().getY();   
+  double goal_angle = atan2( goal_point.getOrigin().getY() - robot_pose_.y(), goal_point.getOrigin().getX() - robot_pose_.x());
+
   if (cfg_.trajectory.global_plan_overwrite_orientation)
   {
     robot_goal_.theta() = estimateLocalGoalOrientation(global_plan_, goal_point, goal_idx, tf_plan_to_global);
@@ -343,11 +350,11 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
   }  
   else
   {
-    robot_goal_.theta() = tf::getYaw(goal_point.getRotation());
+    //robot_goal_.theta() = tf::getYaw(goal_point.getRotation());
+    robot_goal_.theta() = g2o::normalize_theta(goal_angle);
   }
 
 
-  double goal_angle = atan2(goal_point.getOrigin().getY() - robot_pose.getOrigin().getY(), goal_point.getOrigin().getX() - robot_pose.getOrigin().getX());
   double delta_rotate_orient = g2o::normalize_theta( goal_angle - robot_pose_.theta());
   if( rotate_to_global_plan_) {
       ros::Time t = ros::Time::now();
@@ -393,8 +400,8 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
       if ( last_max_vel < cfg_.robot.max_vel_x )
         cfg_.robot.max_vel_x = last_max_vel;
 
-      if( cfg_.robot.max_vel_x < 0.15 ){
-          cfg_.robot.max_vel_x = 0.15;
+      if( cfg_.robot.max_vel_x < 0.1 ){
+          cfg_.robot.max_vel_x = 0.1;
       }
   }
     
@@ -421,7 +428,7 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
   }
 
   bool feasible = planner_->isTrajectoryFeasible(costmap_model_.get(), footprint_spec_, robot_inscribed_radius_, robot_circumscribed_radius, cfg_.trajectory.feasibility_check_no_poses);
-  if (!feasible)
+  if (!feasible&&false)
   {
     cmd_vel.linear.x = 0;
     cmd_vel.linear.y = 0;
@@ -472,6 +479,21 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
   
   // a feasible solution should be found, reset counter
   no_infeasible_plans_ = 0;
+
+  if( cmd_vel.linear.x - last_cmd_.linear.x > 0.05) {
+      cmd_vel.linear.x = last_cmd_.linear.x + 0.05;
+  } else if ( cmd_vel.linear.x - last_cmd_.linear.x < -0.1) {
+      cmd_vel.linear.x = last_cmd_.linear.x -0.1;
+  }
+
+  if( fabs(cmd_vel.angular.z) < 0.12&&fabs(cmd_vel.angular.z) > 0.01 && fabs(cmd_vel.linear.x) < 0.01) {
+    if(cmd_vel.angular.z < 0)
+      cmd_vel.angular.z = -0.15;
+    else 
+      cmd_vel.angular.z = 0.15;
+
+        
+  }
   
   // store last command (for recovery analysis etc.)
   last_cmd_ = cmd_vel;
@@ -524,19 +546,22 @@ void TebLocalPlannerROS::updateObstacleContainerWithCostmap()
           // check if obstacle is interesting (e.g. not far behind the robot)
           Eigen::Vector2d obs_dir = obs-robot_pose_.position();
 
-          if( obs_dir.dot(robot_orient) > 0 && fabs(obs_dir.coeff(1)) < cfg_.robot.decel_width ) {
-              if(obs_dir.norm() < cfg_.obstacles.costmap_obstacles_behind_robot_dist/2.0){
+          if( obs_dir.dot(robot_orient) > 0 && fabs(obs_dir.coeff(1)*cos(robot_pose_.theta()) ) < cfg_.robot.decel_width ) {
+              if(obs_dir.norm() < cfg_.obstacles.costmap_obstacles_behind_robot_dist*0.5){
                   if( cfg_.robot.max_vel_x > old_max_vel_x*0.3)
                     cfg_.robot.max_vel_x = old_max_vel_x*0.3;
-              } else if (obs_dir.norm() < cfg_.obstacles.costmap_obstacles_behind_robot_dist) {
-                  if( cfg_.robot.max_vel_x > old_max_vel_x*0.5)
-                    cfg_.robot.max_vel_x = old_max_vel_x*0.5;
+              } else if (obs_dir.norm() < cfg_.obstacles.costmap_obstacles_behind_robot_dist*1.5) {
+                  double new_max_vel_x = old_max_vel_x*obs_dir.norm()/(cfg_.obstacles.costmap_obstacles_behind_robot_dist*1.5);
+                  if( cfg_.robot.max_vel_x > new_max_vel_x)
+                    cfg_.robot.max_vel_x = new_max_vel_x;
               } else if (obs_dir.norm() < cfg_.obstacles.costmap_obstacles_behind_robot_dist*2) {
-                  if( cfg_.robot.max_vel_x > old_max_vel_x*0.75)
-                    cfg_.robot.max_vel_x = old_max_vel_x*0.75;
-              } else if (obs_dir.norm() < cfg_.obstacles.costmap_obstacles_behind_robot_dist*3) {
-                  if( cfg_.robot.max_vel_x > old_max_vel_x*0.85)
-                    cfg_.robot.max_vel_x = old_max_vel_x*0.85;
+                  double new_max_vel_x = old_max_vel_x*0.92;
+                  if( cfg_.robot.max_vel_x > new_max_vel_x)
+                    cfg_.robot.max_vel_x = new_max_vel_x;
+              }else if (obs_dir.norm() < cfg_.obstacles.costmap_obstacles_behind_robot_dist*3) {
+                  double new_max_vel_x = old_max_vel_x*0.96;
+                  if( cfg_.robot.max_vel_x > new_max_vel_x)
+                    cfg_.robot.max_vel_x = new_max_vel_x;
               }
           }
 

@@ -368,10 +368,9 @@ bool TebOptimalPlanner::optimizeGraph(int no_iterations,bool clear_after)
   //  g2o::OptimizationAlgorithmLevenberg* lm = dynamic_cast<g2o::OptimizationAlgorithmLevenberg*> (optimizer_->solver());
   //  lm->solver()->saveHessian("~/MasterThesis/Matlab/Hessian.txt");
 
-  if(!iter)
-  {
-	ROS_ERROR("optimizeGraph(): Optimization failed! iter=%i", iter);
-	return false;
+  if(!iter) {
+	  ROS_ERROR("optimizeGraph(): Optimization failed! iter=%i", iter);
+	  return false;
   }
 
   if (clear_after) clearGraph();	
@@ -478,16 +477,13 @@ void TebOptimalPlanner::AddEdgesObstacles(double weight_multiplier)
       // create obstacle edges
       if (left_obstacle)
       {
-            if (inflated)
-            {
+            if (inflated) {
                 EdgeInflatedObstacle* dist_bandpt_obst = new EdgeInflatedObstacle;
                 dist_bandpt_obst->setVertex(0,teb_.PoseVertex(i));
                 dist_bandpt_obst->setInformation(information_inflated);
                 dist_bandpt_obst->setParameters(*cfg_, robot_model_.get(), left_obstacle);
                 optimizer_->addEdge(dist_bandpt_obst);
-            }
-            else
-            {
+            } else {
                 EdgeObstacle* dist_bandpt_obst = new EdgeObstacle;
                 dist_bandpt_obst->setVertex(0,teb_.PoseVertex(i));
                 dist_bandpt_obst->setInformation(information);
@@ -498,16 +494,13 @@ void TebOptimalPlanner::AddEdgesObstacles(double weight_multiplier)
       
       if (right_obstacle)
       {
-            if (inflated)
-            {
+            if (inflated) {
                 EdgeInflatedObstacle* dist_bandpt_obst = new EdgeInflatedObstacle;
                 dist_bandpt_obst->setVertex(0,teb_.PoseVertex(i));
                 dist_bandpt_obst->setInformation(information_inflated);
                 dist_bandpt_obst->setParameters(*cfg_, robot_model_.get(), right_obstacle);
                 optimizer_->addEdge(dist_bandpt_obst);
-            }
-            else
-            {
+            } else {
                 EdgeObstacle* dist_bandpt_obst = new EdgeObstacle;
                 dist_bandpt_obst->setVertex(0,teb_.PoseVertex(i));
                 dist_bandpt_obst->setInformation(information);
