@@ -325,6 +325,10 @@ protected:
   void saturateVelocity(double& vx, double& vy, double& omega, double max_vel_x, double max_vel_y,
                         double max_vel_theta, double max_vel_x_backwards) const;
 
+
+  void limitVelocity(const geometry_msgs::Twist& last_vel, geometry_msgs::Twist& current_vel, double max_linear_acc, double max_angle_acc, double dt) const;
+
+
   
   /**
    * @brief Convert translational and rotational velocities to a steering angle of a carlike robot

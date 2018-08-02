@@ -285,6 +285,15 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
   // prune global plan to cut off parts of the past (spatially before the robot)
   pruneGlobalPlan(*tf_, robot_pose, global_plan_);
 
+
+  ros::Time t = ros::Time::now();
+  if(  (t - time_last_rotation_).toSec() > 0.5){
+      dt = 0.1;
+  }else {
+      dt = (t - time_last_rotation_).toSec();
+  }
+  time_last_rotation_ = t;
+
   // Transform global plan to the frame of interest (w.r.t. the local costmap)
   std::vector<geometry_msgs::PoseStamped> transformed_plan;
   int goal_idx;
@@ -293,6 +302,8 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
                            transformed_plan, &goal_idx, &tf_plan_to_global))
   {
     ROS_WARN("Could not transform the global plan to the frame of the controller");
+    limitVelocity(last_cmd_, cmd_vel, cfg_.robot.acc_lim_x*1.5, cfg_.robot.acc_lim_theta*1.5, dt);
+    last_cmd_ = cmd_vel;
     return false;
   }
 
@@ -320,6 +331,8 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
 
   if(goal_distance < cfg_.goal_tolerance.xy_goal_tolerance&&fabs(last_cmd_.linear.x)< 0.1) {
       rotateToOrientation(delta_orient, cmd_vel, cfg_.goal_tolerance.yaw_goal_tolerance);
+      limitVelocity(last_cmd_, cmd_vel, cfg_.rotation.accel, cfg_.rotation.accel, dt);
+      last_cmd_ = cmd_vel;
       return true;
   }
   
@@ -332,6 +345,8 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
   if (transformed_plan.empty())
   {
     ROS_WARN("Transformed plan is empty. Cannot determine a local plan.");
+    limitVelocity(last_cmd_, cmd_vel, cfg_.robot.acc_lim_x*1.5, cfg_.robot.acc_lim_theta*1.5, dt);
+    last_cmd_ = cmd_vel;
     return false;
   }
               
@@ -357,14 +372,8 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
 
   double delta_rotate_orient = g2o::normalize_theta( goal_angle - robot_pose_.theta());
   if( rotate_to_global_plan_) {
-      ros::Time t = ros::Time::now();
-      if(  (t - time_last_rotation_).toSec() > 0.5){
-        dt = 0.1;
-      }else {
-        dt = (t - time_last_rotation_).toSec();
-      }
-      time_last_rotation_ = t;
       rotate_to_global_plan_ = rotateToOrientation(delta_rotate_orient, cmd_vel, 0.1);
+      limitVelocity(last_cmd_, cmd_vel, cfg_.rotation.accel, cfg_.rotation.accel, dt);
       last_cmd_ = cmd_vel;
       planner_->visualize();
       visualization_->publishViaPoints(via_points_);
@@ -454,7 +463,9 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
     last_cmd_ = cmd_vel;
     return false;
   }
-  
+
+
+
   // Saturate velocity, if the optimization results violates the constraints (could be possible due to soft constraints).
   saturateVelocity(cmd_vel.linear.x, cmd_vel.linear.y, cmd_vel.angular.z, cfg_.robot.max_vel_x, cfg_.robot.max_vel_y,
                    cfg_.robot.max_vel_theta, cfg_.robot.max_vel_x_backwards);
@@ -479,12 +490,8 @@ bool TebLocalPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel)
   
   // a feasible solution should be found, reset counter
   no_infeasible_plans_ = 0;
+  limitVelocity(last_cmd_, cmd_vel, cfg_.robot.acc_lim_x, cfg_.robot.acc_lim_theta, dt);
 
-  if( cmd_vel.linear.x - last_cmd_.linear.x > 0.05) {
-      cmd_vel.linear.x = last_cmd_.linear.x + 0.05;
-  } else if ( cmd_vel.linear.x - last_cmd_.linear.x < -0.1) {
-      cmd_vel.linear.x = last_cmd_.linear.x -0.1;
-  }
 
   if( fabs(cmd_vel.angular.z) < 0.12&&fabs(cmd_vel.angular.z) > 0.01 && fabs(cmd_vel.linear.x) < 0.01) {
     if(cmd_vel.angular.z < 0)
@@ -956,6 +963,21 @@ double TebLocalPlannerROS::estimateLocalGoalOrientation(const std::vector<geomet
       tf_pose_k = tf_pose_kp1;
   }
   return average_angles(candidates);
+}
+
+void TebLocalPlannerROS::limitVelocity(const geometry_msgs::Twist& last_vel, geometry_msgs::Twist& current_vel, double max_linear_acc, double max_angle_acc, double dt) const {
+
+    if( current_vel.linear.x - last_vel.linear.x > dt*max_linear_acc) {
+        current_vel.linear.x = last_vel.linear.x + dt*max_linear_acc;
+    } else if ( current_vel.linear.x - last_vel.linear.x < -dt*max_linear_acc) {
+        current_vel.linear.x = last_vel.linear.x -dt*max_linear_acc;
+    }
+
+    if( current_vel.angular.z - last_vel.angular.z > dt*max_angle_acc) {
+        current_vel.angular.z = last_vel.angular.z + dt*max_angle_acc;
+    } else if ( current_vel.angular.z - last_vel.angular.z < -dt*max_angle_acc) {
+        current_vel.angular.z = last_vel.angular.z -dt*max_angle_acc;
+    }
 }
       
       
